@@ -9,7 +9,7 @@ import (
 
 	gc "gopkg.in/check.v1"
 
-	"github.com/juju/utils/clock/monotonic"
+	"github.com/juju/clock/monotonic"
 )
 
 func TestPackage(t *testing.T) {
