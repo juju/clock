@@ -4,6 +4,8 @@
 package testclock
 
 import (
+	"fmt"
+	"runtime/debug"
 	"sort"
 	"sync"
 	"time"
@@ -21,6 +23,7 @@ type timer struct {
 	// trigger is called when the timer expires. It is
 	// called with the clock mutex held and will not block.
 	trigger func()
+	stack   []byte
 }
 
 // Reset is part of the clock.Timer interface.
@@ -92,6 +95,7 @@ func (clock *Clock) addAlarm(d time.Duration, c chan time.Time, trigger func()) 
 		deadline: clock.now.Add(d),
 		clock:    clock,
 		trigger:  trigger,
+		stack:    debug.Stack(),
 	}
 	clock.addTimer(t)
 	clock.triggerAll()
@@ -117,22 +121,37 @@ func (clock *Clock) Advance(d time.Duration) {
 // 'w' for 'n' timers to show up in clock.waiting, and if they do we advance
 // 'd'.
 func (clock *Clock) WaitAdvance(d, w time.Duration, n int) error {
-	if w == 0 {
-		w = time.Second
-	}
 	pause := w / 10
-	for i := 0; i < 10; i++ {
-		if clock.hasNWaiters(n) {
-			clock.Advance(d)
-			return nil
-		}
-		time.Sleep(pause)
+	if pause > 10*time.Millisecond {
+		pause = 10 * time.Millisecond
 	}
-	clock.mu.Lock()
-	got := len(clock.waiting)
-	clock.mu.Unlock()
-	return errors.Errorf(
-		"got %d timers added after waiting %s: wanted %d", got, w.String(), n)
+	finalTimeout := time.After(w)
+	next := time.After(0)
+	for {
+		select {
+		case <-finalTimeout:
+                        if clock.hasNWaiters(n) {
+                            clock.Advance(d)
+                            return nil
+                        }
+			clock.mu.Lock()
+			got := len(clock.waiting)
+			var stacks string
+			for _, t := range clock.waiting {
+				stacks += fmt.Sprintf("timer deadline: %v\n%s", t.deadline, string(t.stack))
+			}
+			clock.mu.Unlock()
+			return errors.Errorf(
+				"got %d timers added after waiting %s: wanted %d, stacks:\n%s",
+				got, w.String(), n, stacks)
+		case <-next:
+			if clock.hasNWaiters(n) {
+				clock.Advance(d)
+				return nil
+			}
+			next = time.After(pause)
+		}
+	}
 }
 
 // hasNWaiters checks if the clock currently has 'n' timers waiting to fire.
