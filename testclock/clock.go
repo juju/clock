@@ -130,6 +130,10 @@ func (clock *Clock) WaitAdvance(d, w time.Duration, n int) error {
 	for {
 		select {
 		case <-finalTimeout:
+                        if clock.hasNWaiters(n) {
+                            clock.Advance(d)
+                            return nil
+                        }
 			clock.mu.Lock()
 			got := len(clock.waiting)
 			var stacks string

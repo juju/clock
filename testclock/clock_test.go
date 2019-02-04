@@ -57,8 +57,12 @@ func (*clockSuite) TestWaitAdvance(c *gc.C) {
 	t0 := time.Now()
 	cl := testclock.NewClock(t0)
 
+        // It is legal to just say 'nothing is waiting'
+	err := cl.WaitAdvance(0, 0, 0)
+	c.Check(err, jc.ErrorIsNil)
+
 	// Test that no timers errors out.
-	err := cl.WaitAdvance(time.Millisecond, 10*time.Millisecond, 1)
+	err = cl.WaitAdvance(time.Millisecond, 10*time.Millisecond, 1)
 	c.Check(err, gc.ErrorMatches, "got 0 timers added after waiting 10ms: wanted 1, stacks:\n")
 
 	// Test that a timer doesn't error.
