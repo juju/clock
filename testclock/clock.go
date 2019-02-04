@@ -130,10 +130,10 @@ func (clock *Clock) WaitAdvance(d, w time.Duration, n int) error {
 	for {
 		select {
 		case <-finalTimeout:
-                        if clock.hasNWaiters(n) {
-                            clock.Advance(d)
-                            return nil
-                        }
+			if clock.hasNWaiters(n) {
+				clock.Advance(d)
+				return nil
+			}
 			clock.mu.Lock()
 			got := len(clock.waiting)
 			var stacks string
@@ -202,6 +202,11 @@ func (clock *Clock) reset(t *timer, d time.Duration) bool {
 	}
 	t.deadline = clock.now.Add(d)
 	sort.Sort(byDeadline(clock.waiting))
+	if d <= 0 {
+		// If duration is <= 0, that means we should be triggering the
+		// Timer right away, as "now" has already occured.
+		clock.triggerAll()
+	}
 	return found
 }
 
