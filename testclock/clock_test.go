@@ -175,18 +175,19 @@ func (*clockSuite) TestNewTimerAsyncReset(c *gc.C) {
 	clock := testclock.NewClock(t0)
 	timer := clock.NewTimer(time.Hour)
 	stop := make(chan struct{})
+	stopped := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		select {
 		case <-stop:
-			return
 		case t := <-timer.Chan():
 			c.Errorf("timer accidentally ticked at: %v", t)
-		case <-time.After(testing.LongWait):
+		case <-time.After(longWait):
 			c.Errorf("test took too long")
 		}
+		close(stopped)
 	}()
 	// Just our goroutine, but we don't go so far as to trigger the wakeup.
 	clock.WaitAdvance(1*time.Minute, 10*time.Millisecond, 1)
@@ -198,13 +199,18 @@ func (*clockSuite) TestNewTimerAsyncReset(c *gc.C) {
 	// Now tell the goroutine to stop and start another one that *does* want to
 	// wake up
 	close(stop)
+	select {
+	case <-stopped:
+	case <-time.After(longWait):
+		c.Errorf("goroutine failed to stop")
+	}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		select {
 		case t := <-timer.Chan():
 			c.Logf("timer successfully ticked: %v", t)
-		case <-time.After(1 * time.Second):
+		case <-time.After(longWait):
 			c.Errorf("timer took too long")
 		}
 	}()
@@ -226,7 +232,7 @@ func (*clockSuite) TestNewTimerResetCausesWakeup(c *gc.C) {
 		select {
 		case t := <-timer1.Chan():
 			c.Check(t0, gc.Equals, t)
-		case <-time.After(1 * time.Second):
+		case <-time.After(longWait):
 			c.Errorf("timer1 took too long to wake up")
 		}
 	}()
@@ -236,7 +242,7 @@ func (*clockSuite) TestNewTimerResetCausesWakeup(c *gc.C) {
 		select {
 		case <-timer2.Chan():
 			c.Errorf("timer2 should not wake up")
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(shortWait):
 			c.Logf("timer2 succesfully slept for 50ms")
 		}
 	}()
@@ -247,7 +253,7 @@ func (*clockSuite) TestNewTimerResetCausesWakeup(c *gc.C) {
 		case t := <-timer3.Chan():
 			// Even though the reset was negative, it triggers at 'now'
 			c.Check(t0, gc.Equals, t)
-		case <-time.After(1 * time.Second):
+		case <-time.After(longWait):
 			c.Errorf("timer3 took too long to wake up")
 		}
 	}()
