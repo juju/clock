@@ -57,7 +57,7 @@ func (*clockSuite) TestWaitAdvance(c *gc.C) {
 	t0 := time.Now()
 	cl := testclock.NewClock(t0)
 
-        // It is legal to just say 'nothing is waiting'
+	// It is legal to just say 'nothing is waiting'
 	err := cl.WaitAdvance(0, 0, 0)
 	c.Check(err, jc.ErrorIsNil)
 
@@ -168,6 +168,100 @@ func (*clockSuite) TestNewTimerReset(c *gc.C) {
 	case <-time.After(longWait):
 		c.Fatalf("expected event to be triggered")
 	}
+}
+
+func (*clockSuite) TestNewTimerAsyncReset(c *gc.C) {
+	t0 := time.Now()
+	clock := testclock.NewClock(t0)
+	timer := clock.NewTimer(time.Hour)
+	stop := make(chan struct{})
+	stopped := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case <-stop:
+		case t := <-timer.Chan():
+			c.Errorf("timer accidentally ticked at: %v", t)
+		case <-time.After(longWait):
+			c.Errorf("test took too long")
+		}
+		close(stopped)
+	}()
+	// Just our goroutine, but we don't go so far as to trigger the wakeup.
+	clock.WaitAdvance(1*time.Minute, 10*time.Millisecond, 1)
+	// Reset shouldn't trigger a wakeup, just move when it thinks it will wake up.
+	timer.Reset(time.Hour)
+	clock.WaitAdvance(1*time.Minute, 10*time.Millisecond, 1)
+	timer.Reset(time.Minute)
+	clock.WaitAdvance(30*time.Second, 10*time.Millisecond, 1)
+	// Now tell the goroutine to stop and start another one that *does* want to
+	// wake up
+	close(stop)
+	select {
+	case <-stopped:
+	case <-time.After(longWait):
+		c.Errorf("goroutine failed to stop")
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case t := <-timer.Chan():
+			c.Logf("timer successfully ticked: %v", t)
+		case <-time.After(longWait):
+			c.Errorf("timer took too long")
+		}
+	}()
+	// And advance the clock long enough to cause it to notice
+	clock.WaitAdvance(30*time.Second, 10*time.Millisecond, 1)
+	wg.Wait()
+}
+
+func (*clockSuite) TestNewTimerResetCausesWakeup(c *gc.C) {
+	t0 := time.Now()
+	clock := testclock.NewClock(t0)
+	timer1 := clock.NewTimer(time.Hour)
+	timer2 := clock.NewTimer(time.Hour)
+	timer3 := clock.NewTimer(time.Hour)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case t := <-timer1.Chan():
+			c.Check(t0, gc.Equals, t)
+		case <-time.After(longWait):
+			c.Errorf("timer1 took too long to wake up")
+		}
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case <-timer2.Chan():
+			c.Errorf("timer2 should not wake up")
+		case <-time.After(shortWait):
+			c.Logf("timer2 succesfully slept for 50ms")
+		}
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case t := <-timer3.Chan():
+			// Even though the reset was negative, it triggers at 'now'
+			c.Check(t0, gc.Equals, t)
+		case <-time.After(longWait):
+			c.Errorf("timer3 took too long to wake up")
+		}
+	}()
+	// Reseting the timer to a time <= 0 should cause it to wake up on its
+	// own, without needing an Advance or WaitAdvance to be done
+	timer1.Reset(0)
+	timer3.Reset(-1 * time.Second)
+	wg.Wait()
 }
 
 func (*clockSuite) TestMultipleWaiters(c *gc.C) {
