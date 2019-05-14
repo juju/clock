@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/juju/clock"
-	"github.com/juju/errors"
-	"github.com/juju/loggo"
 )
 
 // timer implements a mock clock.Timer for testing purposes.
@@ -44,6 +42,7 @@ func (t *timer) Chan() <-chan time.Time {
 // Clock implements a mock clock.Clock for testing purposes.
 type Clock struct {
 	mu           sync.Mutex
+	log          func(string)
 	now          time.Time
 	waiting      []*timer // timers waiting to fire, sorted by deadline.
 	notifyAlarms chan struct{}
@@ -55,9 +54,16 @@ type Clock struct {
 // Alarms chan to keep the buffer clear.
 func NewClock(now time.Time) *Clock {
 	return &Clock{
+		log:          func(string) {},
 		now:          now,
 		notifyAlarms: make(chan struct{}, 10000),
 	}
+}
+
+// SetLog sets the log function that's called if something that probably
+// shouldn't happen occurs.
+func (clock *Clock) SetLog(log func(msg string)) {
+	clock.log = log
 }
 
 // Now is part of the clock.Clock interface.
@@ -109,7 +115,7 @@ func (clock *Clock) Advance(d time.Duration) {
 	defer clock.mu.Unlock()
 	clock.now = clock.now.Add(d)
 	if len(clock.waiting) == 0 {
-		loggo.GetLogger("juju.clock").Debugf("advancing a clock that has nothing waiting: cf. https://github.com/juju/juju/wiki/Intermittent-failures")
+		clock.log("advancing a clock that has nothing waiting: cf. https://github.com/juju/juju/wiki/Intermittent-failures")
 	}
 	clock.triggerAll()
 }
@@ -141,7 +147,7 @@ func (clock *Clock) WaitAdvance(d, w time.Duration, n int) error {
 				stacks += fmt.Sprintf("timer deadline: %v\n%s", t.deadline, string(t.stack))
 			}
 			clock.mu.Unlock()
-			return errors.Errorf(
+			return fmt.Errorf(
 				"got %d timers added after waiting %s: wanted %d, stacks:\n%s",
 				got, w.String(), n, stacks)
 		case <-next:
