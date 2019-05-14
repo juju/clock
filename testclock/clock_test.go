@@ -4,32 +4,22 @@
 package testclock_test
 
 import (
+	"bytes"
+	"fmt"
 	"sync"
-	gotesting "testing"
+	"testing"
 	"time"
 
-	"github.com/juju/loggo"
-	"github.com/juju/testing"
-	jc "github.com/juju/testing/checkers"
-	gc "gopkg.in/check.v1"
+	qt "github.com/frankban/quicktest"
 
 	"github.com/juju/clock/testclock"
 )
 
-type clockSuite struct {
-	testing.LoggingSuite
-}
-
-func TestAll(t *gotesting.T) {
-	gc.TestingT(t)
-}
-
-var _ = gc.Suite(&clockSuite{})
-
-func (*clockSuite) TestNow(c *gc.C) {
+func TestNow(t *testing.T) {
+	c := qt.New(t)
 	t0 := time.Now()
 	cl := testclock.NewClock(t0)
-	c.Assert(cl.Now(), gc.Equals, t0)
+	c.Assert(cl.Now(), qt.Equals, t0)
 }
 
 var (
@@ -37,41 +27,47 @@ var (
 	longWait  = time.Second
 )
 
-func (*clockSuite) TestAdvanceLogs(c *gc.C) {
-	loggo.GetLogger("juju.clock").SetLogLevel(loggo.DEBUG)
+func TestAdvanceLogs(t *testing.T) {
+	c := qt.New(t)
 	t0 := time.Now()
 	cl := testclock.NewClock(t0)
+	var logBuf bytes.Buffer
+	cl.SetLog(func(msg string) {
+		fmt.Fprintln(&logBuf, msg)
+	})
 
 	// Shouldn't log anything.
-	t := cl.After(time.Second)
+	tc := cl.After(time.Second)
 	cl.Advance(time.Minute)
-	<-t
-	c.Check(c.GetTestLog(), jc.DeepEquals, "")
+	<-tc
+	c.Check(logBuf.Bytes(), qt.HasLen, 0)
 
 	// Should log since nothing's waiting.
 	cl.Advance(time.Hour)
-	c.Check(c.GetTestLog(), jc.Contains, "advancing a clock that has nothing waiting: cf. https://github.com/juju/juju/wiki/Intermittent-failures")
+	c.Check(logBuf.String(), qt.Equals, "advancing a clock that has nothing waiting: cf. https://github.com/juju/juju/wiki/Intermittent-failures\n")
 }
 
-func (*clockSuite) TestWaitAdvance(c *gc.C) {
+func TestWaitAdvance(t *testing.T) {
+	c := qt.New(t)
 	t0 := time.Now()
 	cl := testclock.NewClock(t0)
 
 	// It is legal to just say 'nothing is waiting'
 	err := cl.WaitAdvance(0, 0, 0)
-	c.Check(err, jc.ErrorIsNil)
+	c.Check(err, qt.Equals, nil)
 
 	// Test that no timers errors out.
 	err = cl.WaitAdvance(time.Millisecond, 10*time.Millisecond, 1)
-	c.Check(err, gc.ErrorMatches, "got 0 timers added after waiting 10ms: wanted 1, stacks:\n")
+	c.Check(err, qt.ErrorMatches, "got 0 timers added after waiting 10ms: wanted 1, stacks:\n")
 
 	// Test that a timer doesn't error.
 	_ = cl.After(time.Nanosecond)
 	err = cl.WaitAdvance(time.Millisecond, 10*time.Millisecond, 1)
-	c.Check(err, jc.ErrorIsNil)
+	c.Check(err, qt.Equals, nil)
 }
 
-func (*clockSuite) TestAdvanceWithAfter(c *gc.C) {
+func TestAdvanceWithAfter(t *testing.T) {
+	c := qt.New(t)
 	t0 := time.Now()
 	cl := testclock.NewClock(t0)
 	ch := cl.After(time.Second)
@@ -112,10 +108,11 @@ func (*clockSuite) TestAdvanceWithAfter(c *gc.C) {
 	case <-time.After(longWait):
 		c.Fatalf("expected event to be triggered")
 	}
-	c.Assert(cl.Now().UTC(), gc.Equals, t0.Add(4*time.Second).UTC())
+	c.Assert(cl.Now().UTC(), qt.Equals, t0.Add(4*time.Second).UTC())
 }
 
-func (*clockSuite) TestAdvanceWithAfterFunc(c *gc.C) {
+func TestAdvanceWithAfterFunc(t *testing.T) {
+	c := qt.New(t)
 	// Most of the details have been checked in TestAdvanceWithAfter,
 	// so just check that AfterFunc is wired up correctly.
 	t0 := time.Now()
@@ -132,7 +129,8 @@ func (*clockSuite) TestAdvanceWithAfterFunc(c *gc.C) {
 	}
 }
 
-func (*clockSuite) TestAfterFuncStop(c *gc.C) {
+func TestAfterFuncStop(t *testing.T) {
+	c := qt.New(t)
 	t0 := time.Now()
 	cl := testclock.NewClock(t0)
 	fired := make(chan struct{})
@@ -148,14 +146,15 @@ func (*clockSuite) TestAfterFuncStop(c *gc.C) {
 	}
 }
 
-func (*clockSuite) TestNewTimerReset(c *gc.C) {
+func TestNewTimerReset(t *testing.T) {
+	c := qt.New(t)
 	t0 := time.Now()
 	cl := testclock.NewClock(t0)
 	timer := cl.NewTimer(time.Second)
 	cl.Advance(time.Second)
 	select {
 	case t := <-timer.Chan():
-		c.Assert(t.UTC(), gc.Equals, t0.Add(time.Second).UTC())
+		c.Assert(t.UTC(), qt.Equals, t0.Add(time.Second).UTC())
 	case <-time.After(longWait):
 		c.Fatalf("expected event to be triggered")
 	}
@@ -164,13 +163,14 @@ func (*clockSuite) TestNewTimerReset(c *gc.C) {
 	cl.Advance(100 * time.Millisecond)
 	select {
 	case t := <-timer.Chan():
-		c.Assert(t.UTC(), gc.Equals, t0.Add(time.Second+100*time.Millisecond).UTC())
+		c.Assert(t.UTC(), qt.Equals, t0.Add(time.Second+100*time.Millisecond).UTC())
 	case <-time.After(longWait):
 		c.Fatalf("expected event to be triggered")
 	}
 }
 
-func (*clockSuite) TestNewTimerAsyncReset(c *gc.C) {
+func TestNewTimerAsyncReset(t *testing.T) {
+	c := qt.New(t)
 	t0 := time.Now()
 	clock := testclock.NewClock(t0)
 	timer := clock.NewTimer(time.Hour)
@@ -219,7 +219,8 @@ func (*clockSuite) TestNewTimerAsyncReset(c *gc.C) {
 	wg.Wait()
 }
 
-func (*clockSuite) TestNewTimerResetCausesWakeup(c *gc.C) {
+func TestNewTimerResetCausesWakeup(t *testing.T) {
+	c := qt.New(t)
 	t0 := time.Now()
 	clock := testclock.NewClock(t0)
 	timer1 := clock.NewTimer(time.Hour)
@@ -231,7 +232,7 @@ func (*clockSuite) TestNewTimerResetCausesWakeup(c *gc.C) {
 		defer wg.Done()
 		select {
 		case t := <-timer1.Chan():
-			c.Check(t0, gc.Equals, t)
+			c.Check(t0, qt.Equals, t)
 		case <-time.After(longWait):
 			c.Errorf("timer1 took too long to wake up")
 		}
@@ -252,7 +253,7 @@ func (*clockSuite) TestNewTimerResetCausesWakeup(c *gc.C) {
 		select {
 		case t := <-timer3.Chan():
 			// Even though the reset was negative, it triggers at 'now'
-			c.Check(t0, gc.Equals, t)
+			c.Check(t0, qt.Equals, t)
 		case <-time.After(longWait):
 			c.Errorf("timer3 took too long to wake up")
 		}
@@ -264,7 +265,8 @@ func (*clockSuite) TestNewTimerResetCausesWakeup(c *gc.C) {
 	wg.Wait()
 }
 
-func (*clockSuite) TestMultipleWaiters(c *gc.C) {
+func TestMultipleWaiters(t *testing.T) {
+	c := qt.New(t)
 	var wg sync.WaitGroup
 	t0 := time.Date(2000, 01, 01, 01, 0, 0, 0, time.UTC)
 	cl := testclock.NewClock(t0)
