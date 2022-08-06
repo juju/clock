@@ -49,6 +49,8 @@ type Clock struct {
 	notifyAlarms chan struct{}
 }
 
+var _ AdvanceableClock = (*Clock)(nil)
+
 // NewClock returns a new clock set to the supplied time. If your SUT needs to
 // call After, AfterFunc, NewTimer or Timer.Reset more than 10000 times: (1)
 // you have probably written a bad test; and (2) you'll need to read from the

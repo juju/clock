@@ -1,6 +1,6 @@
 module github.com/juju/clock
 
-go 1.17
+go 1.18
 
 require (
 	github.com/juju/errors v0.0.0-20220203013757-bd733f3c86b9
