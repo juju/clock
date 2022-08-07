@@ -5,6 +5,7 @@ package testclock
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/juju/clock"
@@ -13,12 +14,9 @@ import (
 // NewDilatedWallClock returns a clock that can be sped up or slowed down.
 // realSecondDuration is the real duration of a second.
 func NewDilatedWallClock(realSecondDuration time.Duration) AdvanceableClock {
-	offset := make(chan time.Duration, 1)
-	offset <- time.Duration(0)
 	dc := &dilationClock{
 		epoch:              time.Now(),
 		realSecondDuration: realSecondDuration,
-		offset:             offset,
 		offsetChanged:      make(chan any),
 	}
 	dc.offsetChangedCond = sync.NewCond(dc.offsetChangedMutex.RLocker())
@@ -29,10 +27,8 @@ type dilationClock struct {
 	epoch              time.Time
 	realSecondDuration time.Duration
 
-	// offset is the current dilated offset to allow for time jumps/advances
-	// it is implemented as a single length buffered channel to simplify use.
-	// If you take it, you must return it.
-	offset chan time.Duration
+	// offsetAtomic is the current dilated offset to allow for time jumps/advances.
+	offsetAtomic int64
 	// offsetChanged is a channel that is closed when timers need to be signaled
 	// that there is a offset change coming.
 	offsetChanged chan any
@@ -51,9 +47,8 @@ func (dc *dilationClock) Now() time.Time {
 }
 
 func (dc *dilationClock) nowWithOffset() (time.Time, time.Duration) {
-	offset := <-dc.offset
+	offset := time.Duration(atomic.LoadInt64(&dc.offsetAtomic))
 	realNow := time.Now()
-	dc.offset <- offset
 	dt := dilateTime(dc.epoch, realNow, dc.realSecondDuration, offset)
 	return dt, offset
 }
@@ -76,12 +71,10 @@ func (dc *dilationClock) NewTimer(d time.Duration) clock.Timer {
 
 // Advance implements AdvanceableClock.Advance
 func (dc *dilationClock) Advance(d time.Duration) {
-	offset := <-dc.offset
-	offset += d
 	close(dc.offsetChanged)
 	dc.offsetChangedMutex.Lock()
 	dc.offsetChanged = make(chan any)
-	dc.offset <- offset
+	atomic.AddInt64(&dc.offsetAtomic, int64(d))
 	dc.offsetChangedCond.Broadcast()
 	dc.offsetChangedMutex.Unlock()
 }
@@ -162,20 +155,18 @@ func (t *dilatedWallTimer) run() {
 			return
 		case <-t.dc.offsetChanged:
 			t.dc.offsetChangedCond.Wait()
-			newOffset := <-t.dc.offset
+			newOffset := time.Duration(atomic.LoadInt64(&t.dc.offsetAtomic))
 			if newOffset == t.offset {
-				t.dc.offset <- newOffset
 				continue
 			}
-			realNow := time.Now()
-			t.dc.offset <- newOffset
 			t.offset = newOffset
-			dialatedNow := dilateTime(t.dc.epoch, realNow, t.dc.realSecondDuration, t.offset)
-			dialatedDuration := t.target.Sub(dialatedNow)
 			stopped := t.timer.Stop()
 			if !stopped {
 				panic("stopped timer but still running")
 			}
+			realNow := time.Now()
+			dialatedNow := dilateTime(t.dc.epoch, realNow, t.dc.realSecondDuration, t.offset)
+			dialatedDuration := t.target.Sub(dialatedNow)
 			if dialatedDuration <= 0 {
 				sendChan = t.c
 				sendTime = dialatedNow
