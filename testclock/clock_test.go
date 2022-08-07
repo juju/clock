@@ -5,7 +5,6 @@ package testclock_test
 
 import (
 	"sync"
-	gotesting "testing"
 	"time"
 
 	"github.com/juju/loggo"
@@ -20,10 +19,6 @@ type clockSuite struct {
 	testing.LoggingSuite
 }
 
-func TestAll(t *gotesting.T) {
-	gc.TestingT(t)
-}
-
 var _ = gc.Suite(&clockSuite{})
 
 func (*clockSuite) TestNow(c *gc.C) {
@@ -31,11 +26,6 @@ func (*clockSuite) TestNow(c *gc.C) {
 	cl := testclock.NewClock(t0)
 	c.Assert(cl.Now(), gc.Equals, t0)
 }
-
-var (
-	shortWait = 50 * time.Millisecond
-	longWait  = time.Second
-)
 
 func (*clockSuite) TestAdvanceLogs(c *gc.C) {
 	loggo.GetLogger("juju.clock").SetLogLevel(loggo.DEBUG)

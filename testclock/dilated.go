@@ -213,6 +213,9 @@ func (t *dilatedWallTimer) Stop() bool {
 
 func dilateTime(epoch, realNow time.Time,
 	realSecondDuration, dilatedOffset time.Duration) time.Time {
-	return epoch.Add(dilatedOffset).
-		Add(time.Duration(float64(realNow.Sub(epoch)) / realSecondDuration.Seconds()))
+	delta := realNow.Sub(epoch)
+	if delta < 0 {
+		delta = time.Duration(0)
+	}
+	return epoch.Add(dilatedOffset).Add(time.Duration(float64(delta) / realSecondDuration.Seconds()))
 }
