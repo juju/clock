@@ -162,7 +162,7 @@ func (t *dilatedWallTimer) run() {
 			t.offset = newOffset
 			stopped := t.timer.Stop()
 			if !stopped {
-				panic("stopped timer but still running")
+				continue
 			}
 			realNow := time.Now()
 			dialatedNow := dilateTime(t.dc.epoch, realNow, t.dc.realSecondDuration, t.offset)

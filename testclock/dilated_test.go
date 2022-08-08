@@ -168,7 +168,7 @@ func (*dilatedClockSuite) TestReset(c *gc.C) {
 	select {
 	case <-a.Chan():
 	case <-time.After(shortWait):
-		c.Fatal("clock did not fire")
+		c.Fatal("timer did not fire")
 	}
 	for i := 0; i < 3; i++ {
 		if runtime.NumGoroutine() == numGo {
@@ -192,7 +192,27 @@ func (*dilatedClockSuite) TestStopReset(c *gc.C) {
 	select {
 	case <-a.Chan():
 	case <-time.After(shortWait):
-		c.Fatal("clock did not fire")
+		c.Fatal("timer did not fire")
+	}
+	for i := 0; i < 3; i++ {
+		if runtime.NumGoroutine() == numGo {
+			break
+		}
+		time.Sleep(shortWait)
+	}
+	c.Assert(runtime.NumGoroutine(), gc.Equals, numGo, gc.Commentf("clock goroutine still running"))
+}
+
+func (*dilatedClockSuite) TestAdvanceAlreadyFired(c *gc.C) {
+	numGo := runtime.NumGoroutine()
+	cl := testclock.NewDilatedWallClock(time.Second)
+	t := cl.NewTimer(time.Millisecond)
+	time.Sleep(shortWait)
+	cl.Advance(time.Second)
+	select {
+	case <-t.Chan():
+	case <-time.After(shortWait):
+		c.Fatal("timer did not fire")
 	}
 	for i := 0; i < 3; i++ {
 		if runtime.NumGoroutine() == numGo {
