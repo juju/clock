@@ -4,10 +4,12 @@
 package testclock_test
 
 import (
+	"math/rand"
 	"runtime"
 	"sync"
 	"time"
 
+	"github.com/juju/clock"
 	"github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
@@ -27,17 +29,25 @@ type dilatedClockSuite struct {
 var _ = gc.Suite(&dilatedClockSuite{})
 
 func (*dilatedClockSuite) TestSlowedAfter(c *gc.C) {
-	t0 := time.Now()
 	cl := testclock.NewDilatedWallClock(doubleSecond)
-	t1 := <-cl.After(time.Second)
+	t0 := time.Now()
+	d0 := cl.Now()
+	d1 := <-cl.After(time.Second)
+	t1 := time.Now()
 	c.Assert(t1.Sub(t0).Seconds(), jc.GreaterThan, 1.9)
+	c.Assert(d1.Sub(d0).Seconds(), jc.GreaterThan, 0.9)
+	c.Assert(d1.Sub(d0).Seconds(), jc.LessThan, 1.1)
 }
 
 func (*dilatedClockSuite) TestFastAfter(c *gc.C) {
-	t0 := time.Now()
 	cl := testclock.NewDilatedWallClock(halfSecond)
-	t1 := <-cl.After(time.Second)
+	t0 := time.Now()
+	d0 := cl.Now()
+	d1 := <-cl.After(time.Second)
+	t1 := time.Now()
 	c.Assert(t1.Sub(t0).Milliseconds(), jc.LessThan, 600)
+	c.Assert(d1.Sub(d0).Milliseconds(), jc.GreaterThan, 990)
+	c.Assert(d1.Sub(d0).Milliseconds(), jc.LessThan, 1010)
 }
 
 func (*dilatedClockSuite) TestSlowedAfterFunc(c *gc.C) {
@@ -221,4 +231,64 @@ func (*dilatedClockSuite) TestAdvanceAlreadyFired(c *gc.C) {
 		time.Sleep(shortWait)
 	}
 	c.Assert(runtime.NumGoroutine(), gc.Equals, numGo, gc.Commentf("clock goroutine still running"))
+}
+
+func (*dilatedClockSuite) TestAdvanceFast(c *gc.C) {
+	cl := testclock.NewDilatedWallClock(time.Minute)
+	timers := make([]clock.Timer, 0, 1000)
+	for i := time.Millisecond; i <= time.Second; i += time.Millisecond {
+		timers = append(timers, cl.NewTimer(i))
+	}
+	for i := 0; i < 10000; i++ {
+		cl.Advance(100 * time.Microsecond)
+	}
+	deadline := time.After(10 * time.Second)
+	for _, timer := range timers {
+		select {
+		case <-timer.Chan():
+		case <-deadline:
+			c.Fatal("timer did not fire by deadline")
+		}
+	}
+}
+
+func (*dilatedClockSuite) TestAdvanceReset(c *gc.C) {
+	cl := testclock.NewDilatedWallClock(time.Minute)
+	timers := make([]clock.Timer, 0, 10)
+	for i := 0; i < 10; i++ {
+		timers = append(timers, cl.NewTimer(time.Millisecond))
+	}
+	deadline := time.After(10 * time.Second)
+	for i := 0; i < 1000; i++ {
+		cl.Advance(time.Millisecond)
+		for _, timer := range timers {
+			select {
+			case <-timer.Chan():
+			case <-deadline:
+				c.Fatal("timer did not fire by deadline")
+			}
+			timer.Reset(time.Millisecond)
+		}
+	}
+}
+
+func (*dilatedClockSuite) TestAdvanceResetRacey(c *gc.C) {
+	cl := testclock.NewDilatedWallClock(time.Second)
+	timers := make([]clock.Timer, 0, 10)
+	for i := 0; i < 10; i++ {
+		timers = append(timers, cl.NewTimer(time.Millisecond))
+	}
+	deadline := time.After(2 * time.Second)
+	for i := 0; i < 1000; i++ {
+		time.Sleep(999 * time.Microsecond)
+		cl.Advance(time.Microsecond * time.Duration(rand.Intn(2)))
+		for _, timer := range timers {
+			select {
+			case <-timer.Chan():
+			case <-deadline:
+				c.Fatal("timer did not fire by deadline")
+			}
+			timer.Reset(time.Millisecond)
+		}
+	}
 }
