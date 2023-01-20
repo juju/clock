@@ -27,17 +27,25 @@ type dilatedClockSuite struct {
 var _ = gc.Suite(&dilatedClockSuite{})
 
 func (*dilatedClockSuite) TestSlowedAfter(c *gc.C) {
-	t0 := time.Now()
 	cl := testclock.NewDilatedWallClock(doubleSecond)
-	t1 := <-cl.After(time.Second)
+	t0 := time.Now()
+	d0 := cl.Now()
+	d1 := <-cl.After(time.Second)
+	t1 := time.Now()
 	c.Assert(t1.Sub(t0).Seconds(), jc.GreaterThan, 1.9)
+	c.Assert(d1.Sub(d0).Seconds(), jc.GreaterThan, 0.9)
+	c.Assert(d1.Sub(d0).Seconds(), jc.LessThan, 1.1)
 }
 
 func (*dilatedClockSuite) TestFastAfter(c *gc.C) {
-	t0 := time.Now()
 	cl := testclock.NewDilatedWallClock(halfSecond)
-	t1 := <-cl.After(time.Second)
+	t0 := time.Now()
+	d0 := cl.Now()
+	d1 := <-cl.After(time.Second)
+	t1 := time.Now()
 	c.Assert(t1.Sub(t0).Milliseconds(), jc.LessThan, 600)
+	c.Assert(d1.Sub(d0).Milliseconds(), jc.GreaterThan, 990)
+	c.Assert(d1.Sub(d0).Milliseconds(), jc.LessThan, 1010)
 }
 
 func (*dilatedClockSuite) TestSlowedAfterFunc(c *gc.C) {

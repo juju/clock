@@ -148,7 +148,7 @@ func (t *dilatedWallTimer) run() {
 				panic("reset should have been called")
 			}
 			sendChan = t.c
-			sendTime = tt
+			sendTime = dilateTime(t.dc.epoch, tt, t.dc.realSecondDuration, t.offset)
 		case sendChan <- sendTime:
 			sendChan = nil
 			sendTime = time.Time{}
