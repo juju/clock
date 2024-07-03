@@ -50,6 +50,28 @@ func (*dilatedClockSuite) TestFastAfter(c *gc.C) {
 	c.Assert(d1.Sub(d0).Milliseconds(), jc.LessThan, 1010)
 }
 
+func (*dilatedClockSuite) TestSlowedAt(c *gc.C) {
+	cl := testclock.NewDilatedWallClock(doubleSecond)
+	t0 := time.Now()
+	d0 := cl.Now()
+	d1 := <-cl.At(d0.Add(time.Second))
+	t1 := time.Now()
+	c.Assert(t1.Sub(t0).Seconds(), jc.GreaterThan, 1.9)
+	c.Assert(d1.Sub(d0).Seconds(), jc.GreaterThan, 0.9)
+	c.Assert(d1.Sub(d0).Seconds(), jc.LessThan, 1.1)
+}
+
+func (*dilatedClockSuite) TestFastAt(c *gc.C) {
+	cl := testclock.NewDilatedWallClock(halfSecond)
+	t0 := time.Now()
+	d0 := cl.Now()
+	d1 := <-cl.At(d0.Add(time.Second))
+	t1 := time.Now()
+	c.Assert(t1.Sub(t0).Milliseconds(), jc.LessThan, 600)
+	c.Assert(d1.Sub(d0).Milliseconds(), jc.GreaterThan, 990)
+	c.Assert(d1.Sub(d0).Milliseconds(), jc.LessThan, 1010)
+}
+
 func (*dilatedClockSuite) TestSlowedAfterFunc(c *gc.C) {
 	t0 := time.Now()
 	cl := testclock.NewDilatedWallClock(doubleSecond)
@@ -68,6 +90,32 @@ func (*dilatedClockSuite) TestFastAfterFunc(c *gc.C) {
 	mut := sync.Mutex{}
 	mut.Lock()
 	cl.AfterFunc(time.Second, func() {
+		defer mut.Unlock()
+		c.Check(time.Since(t0).Milliseconds(), jc.LessThan, 600)
+	})
+	mut.Lock()
+}
+
+func (*dilatedClockSuite) TestSlowedAtFunc(c *gc.C) {
+	t0 := time.Now()
+	cl := testclock.NewDilatedWallClock(doubleSecond)
+	d0 := cl.Now()
+	mut := sync.Mutex{}
+	mut.Lock()
+	cl.AtFunc(d0.Add(time.Second), func() {
+		defer mut.Unlock()
+		c.Check(time.Since(t0).Seconds(), jc.GreaterThan, 1.9)
+	})
+	mut.Lock()
+}
+
+func (*dilatedClockSuite) TestFastAtFunc(c *gc.C) {
+	t0 := time.Now()
+	cl := testclock.NewDilatedWallClock(halfSecond)
+	d0 := cl.Now()
+	mut := sync.Mutex{}
+	mut.Lock()
+	cl.AtFunc(d0.Add(time.Second), func() {
 		defer mut.Unlock()
 		c.Check(time.Since(t0).Milliseconds(), jc.LessThan, 600)
 	})
@@ -104,6 +152,20 @@ func (*dilatedClockSuite) TestAdvance(c *gc.C) {
 	t0 := time.Now()
 	cl := testclock.NewDilatedWallClock(halfSecond)
 	first := cl.After(time.Second)
+	cl.Advance(halfSecond)
+	<-time.After(250 * time.Millisecond)
+	select {
+	case t := <-first:
+		c.Assert(t.Sub(t0).Milliseconds(), jc.GreaterThan, 249)
+	case <-time.After(shortWait):
+		c.Fatal("timer failed to trigger early")
+	}
+}
+
+func (*dilatedClockSuite) TestAdvanceAt(c *gc.C) {
+	t0 := time.Now()
+	cl := testclock.NewDilatedWallClock(halfSecond)
+	first := cl.At(cl.Now().Add(time.Second))
 	cl.Advance(halfSecond)
 	<-time.After(250 * time.Millisecond)
 	select {
@@ -272,6 +334,28 @@ func (*dilatedClockSuite) TestAdvanceReset(c *gc.C) {
 	}
 }
 
+func (*dilatedClockSuite) TestAdvanceAlarmReset(c *gc.C) {
+	cl := testclock.NewDilatedWallClock(time.Minute)
+	alarms := make([]clock.Alarm, 0, 10)
+	d0 := cl.Now()
+	for i := 0; i < 10; i++ {
+		alarms = append(alarms, cl.NewAlarm(d0.Add(time.Millisecond)))
+	}
+	deadline := time.After(10 * time.Second)
+	for i := 0; i < 1000; i++ {
+		cl.Advance(time.Millisecond)
+		d0 = cl.Now()
+		for _, alarm := range alarms {
+			select {
+			case <-alarm.Chan():
+			case <-deadline:
+				c.Fatal("alarm did not fire by deadline")
+			}
+			alarm.Reset(d0.Add(time.Millisecond))
+		}
+	}
+}
+
 func (*dilatedClockSuite) TestAdvanceResetRacey(c *gc.C) {
 	cl := testclock.NewDilatedWallClock(time.Second)
 	timers := make([]clock.Timer, 0, 10)
@@ -290,5 +374,38 @@ func (*dilatedClockSuite) TestAdvanceResetRacey(c *gc.C) {
 			}
 			timer.Reset(time.Millisecond)
 		}
+	}
+}
+
+func (*dilatedClockSuite) TestAdvanceAlarmResetRacey(c *gc.C) {
+	cl := testclock.NewDilatedWallClock(time.Second)
+	alarms := make([]clock.Alarm, 0, 10)
+	d0 := cl.Now()
+	for i := 0; i < 10; i++ {
+		alarms = append(alarms, cl.NewAlarm(d0.Add(time.Millisecond)))
+	}
+	deadline := time.After(2 * time.Second)
+	for i := 0; i < 1000; i++ {
+		time.Sleep(999 * time.Microsecond)
+		cl.Advance(time.Microsecond * time.Duration(rand.Intn(2)))
+		d0 = cl.Now()
+		for _, alarm := range alarms {
+			select {
+			case <-alarm.Chan():
+			case <-deadline:
+				c.Fatal("alarm did not fire by deadline")
+			}
+			alarm.Reset(d0.Add(time.Millisecond))
+		}
+	}
+}
+
+func (*dilatedClockSuite) TestPastAlarmFired(c *gc.C) {
+	cl := testclock.NewDilatedWallClock(time.Second)
+	alarm := cl.NewAlarm(cl.Now().Add(-time.Nanosecond))
+	select {
+	case <-alarm.Chan():
+	case <-time.After(testing.ShortWait):
+		c.Fatal("alarm did not fire by deadline")
 	}
 }

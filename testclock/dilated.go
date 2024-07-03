@@ -55,18 +55,34 @@ func (dc *dilationClock) nowWithOffset() (time.Time, time.Duration) {
 
 // After implements Clock.After
 func (dc *dilationClock) After(d time.Duration) <-chan time.Time {
-	t := newDilatedWallTimer(dc, d, nil)
+	t := newDilatedWallTimer(dc, instant{d: &d}, nil)
 	return t.c
 }
 
 // AfterFunc implements Clock.AfterFunc
 func (dc *dilationClock) AfterFunc(d time.Duration, f func()) clock.Timer {
-	return newDilatedWallTimer(dc, d, f)
+	return newDilatedWallTimer(dc, instant{d: &d}, f)
 }
 
 // NewTimer implements Clock.NewTimer
 func (dc *dilationClock) NewTimer(d time.Duration) clock.Timer {
-	return newDilatedWallTimer(dc, d, nil)
+	return newDilatedWallTimer(dc, instant{d: &d}, nil)
+}
+
+// At implements Clock.At
+func (dc *dilationClock) At(t time.Time) <-chan time.Time {
+	timer := newDilatedWallTimer(dc, instant{t: &t}, nil)
+	return timer.c
+}
+
+// AtFunc implements Clock.AtFunc
+func (dc *dilationClock) AtFunc(t time.Time, f func()) clock.Alarm {
+	return &dilatedWallAlarm{newDilatedWallTimer(dc, instant{t: &t}, f)}
+}
+
+// NewAlarm implements Clock.NewAlarm
+func (dc *dilationClock) NewAlarm(t time.Time) clock.Alarm {
+	return &dilatedWallAlarm{newDilatedWallTimer(dc, instant{t: &t}, nil)}
 }
 
 // Advance implements AdvanceableClock.Advance
@@ -93,27 +109,33 @@ type dilatedWallTimer struct {
 	stopChan   chan chan bool
 }
 
+// dilatedWallAlarm implements the Alarm interface.
+type dilatedWallAlarm struct {
+	*dilatedWallTimer
+}
+
 type resetReq struct {
-	d time.Duration
+	f instant
 	r chan bool
 }
 
-func newDilatedWallTimer(dc *dilationClock, d time.Duration, after func()) *dilatedWallTimer {
+func newDilatedWallTimer(dc *dilationClock, f instant, after func()) *dilatedWallTimer {
 	t := &dilatedWallTimer{
 		dc:        dc,
 		c:         make(chan time.Time),
 		resetChan: make(chan resetReq),
 		stopChan:  make(chan chan bool),
 	}
-	t.start(d, after)
+	t.start(f, after)
 	return t
 }
 
-func (t *dilatedWallTimer) start(d time.Duration, after func()) {
+func (t *dilatedWallTimer) start(f instant, after func()) {
 	t.dc.offsetChangedMutex.RLock()
-	dialatedNow, offset := t.dc.nowWithOffset()
-	realDuration := time.Duration(float64(d) * t.dc.realSecondDuration.Seconds())
-	t.target = dialatedNow.Add(d)
+	dilatedNow, offset := t.dc.nowWithOffset()
+	until := f.until(dilatedNow)
+	realDuration := time.Duration(float64(until) * t.dc.realSecondDuration.Seconds())
+	t.target = f.deadline(dilatedNow)
 	t.timer = time.NewTimer(realDuration)
 	t.offset = offset
 	t.after = after
@@ -130,9 +152,10 @@ func (t *dilatedWallTimer) run() {
 		select {
 		case reset := <-t.resetChan:
 			realNow := time.Now()
-			dialatedNow := dilateTime(t.dc.epoch, realNow, t.dc.realSecondDuration, t.offset)
-			realDuration := time.Duration(float64(reset.d) * t.dc.realSecondDuration.Seconds())
-			t.target = dialatedNow.Add(reset.d)
+			dilatedNow := dilateTime(t.dc.epoch, realNow, t.dc.realSecondDuration, t.offset)
+			until := reset.f.until(dilatedNow)
+			realDuration := time.Duration(float64(until) * t.dc.realSecondDuration.Seconds())
+			t.target = reset.f.deadline(dilatedNow)
 			sendChan = nil
 			sendTime = time.Time{}
 			reset.r <- t.timer.Reset(realDuration)
@@ -165,14 +188,14 @@ func (t *dilatedWallTimer) run() {
 				continue
 			}
 			realNow := time.Now()
-			dialatedNow := dilateTime(t.dc.epoch, realNow, t.dc.realSecondDuration, t.offset)
-			dialatedDuration := t.target.Sub(dialatedNow)
-			if dialatedDuration <= 0 {
+			dilatedNow := dilateTime(t.dc.epoch, realNow, t.dc.realSecondDuration, t.offset)
+			dilatedDuration := t.target.Sub(dilatedNow)
+			if dilatedDuration <= 0 {
 				sendChan = t.c
-				sendTime = dialatedNow
+				sendTime = dilatedNow
 				continue
 			}
-			realDuration := time.Duration(float64(dialatedDuration) * t.dc.realSecondDuration.Seconds())
+			realDuration := time.Duration(float64(dilatedDuration) * t.dc.realSecondDuration.Seconds())
 			t.timer.Reset(realDuration)
 		}
 	}
@@ -185,15 +208,24 @@ func (t *dilatedWallTimer) Chan() <-chan time.Time {
 
 // Chan implements Timer.Reset
 func (t *dilatedWallTimer) Reset(d time.Duration) bool {
+	return t.reset(instant{d: &d})
+}
+
+// Chan implements Alarm.Reset
+func (a *dilatedWallAlarm) Reset(t time.Time) bool {
+	return a.reset(instant{t: &t})
+}
+
+func (t *dilatedWallTimer) reset(f instant) bool {
 	t.resetMutex.Lock()
 	defer t.resetMutex.Unlock()
 	reset := resetReq{
-		d: d,
+		f: f,
 		r: make(chan bool),
 	}
 	select {
 	case <-t.done:
-		t.start(d, nil)
+		t.start(f, nil)
 		return true
 	case t.resetChan <- reset:
 		return <-reset.r
@@ -218,4 +250,29 @@ func dilateTime(epoch, realNow time.Time,
 		delta = time.Duration(0)
 	}
 	return epoch.Add(dilatedOffset).Add(time.Duration(float64(delta) / realSecondDuration.Seconds()))
+}
+
+type instant struct {
+	t *time.Time
+	d *time.Duration
+}
+
+func (f instant) until(now time.Time) time.Duration {
+	switch {
+	case f.t != nil:
+		return f.t.Sub(now)
+	case f.d != nil:
+		return *f.d
+	}
+	return time.Duration(0)
+}
+
+func (f instant) deadline(now time.Time) time.Time {
+	switch {
+	case f.t != nil:
+		return *f.t
+	case f.d != nil:
+		return now.Add(*f.d)
+	}
+	return now
 }

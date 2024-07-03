@@ -105,6 +105,30 @@ func (*clockSuite) TestAdvanceWithAfter(c *gc.C) {
 	c.Assert(cl.Now().UTC(), gc.Equals, t0.Add(4*time.Second).UTC())
 }
 
+func (*clockSuite) TestAdvanceWithAt(c *gc.C) {
+	t0 := time.Now()
+	cl := testclock.NewClock(t0)
+
+	// Use current time to schedule for 1 minute, but advance between.
+	target := cl.Now().Add(time.Minute)
+	cl.Advance(59 * time.Second)
+	ch := cl.At(target)
+	select {
+	case <-ch:
+		c.Fatalf("received unexpected event")
+	case <-time.After(shortWait):
+	}
+
+	cl.Advance(time.Second)
+
+	select {
+	case t1 := <-ch:
+		c.Assert(t1.Sub(target) >= 0, jc.IsTrue)
+	case <-time.After(shortWait):
+		c.Fatalf("expected event to be triggered")
+	}
+}
+
 func (*clockSuite) TestAdvanceWithAfterFunc(c *gc.C) {
 	// Most of the details have been checked in TestAdvanceWithAfter,
 	// so just check that AfterFunc is wired up correctly.
@@ -122,6 +146,32 @@ func (*clockSuite) TestAdvanceWithAfterFunc(c *gc.C) {
 	}
 }
 
+func (*clockSuite) TestAdvanceWithAtFunc(c *gc.C) {
+	t0 := time.Now()
+	cl := testclock.NewClock(t0)
+
+	fired := make(chan struct{})
+	// Use current time to schedule for 1 minute, but advance between.
+	target := cl.Now().Add(time.Minute)
+	cl.Advance(59 * time.Second)
+	cl.AtFunc(target, func() {
+		close(fired)
+	})
+	select {
+	case <-fired:
+		c.Fatalf("received unexpected event")
+	case <-time.After(shortWait):
+	}
+
+	cl.Advance(time.Second)
+
+	select {
+	case <-fired:
+	case <-time.After(shortWait):
+		c.Fatalf("expected event to be triggered")
+	}
+}
+
 func (*clockSuite) TestAfterFuncStop(c *gc.C) {
 	t0 := time.Now()
 	cl := testclock.NewClock(t0)
@@ -131,6 +181,22 @@ func (*clockSuite) TestAfterFuncStop(c *gc.C) {
 	})
 	cl.Advance(50 * time.Millisecond)
 	timer.Stop()
+	select {
+	case <-fired:
+		c.Fatalf("received unexpected event")
+	case <-time.After(shortWait):
+	}
+}
+
+func (*clockSuite) TestAtFuncStop(c *gc.C) {
+	t0 := time.Now()
+	cl := testclock.NewClock(t0)
+	fired := make(chan struct{})
+	alarm := cl.AtFunc(cl.Now().Add(time.Second), func() {
+		close(fired)
+	})
+	cl.Advance(50 * time.Millisecond)
+	alarm.Stop()
 	select {
 	case <-fired:
 		c.Fatalf("received unexpected event")
@@ -154,6 +220,31 @@ func (*clockSuite) TestNewTimerReset(c *gc.C) {
 	cl.Advance(100 * time.Millisecond)
 	select {
 	case t := <-timer.Chan():
+		c.Assert(t.UTC(), gc.Equals, t0.Add(time.Second+100*time.Millisecond).UTC())
+	case <-time.After(longWait):
+		c.Fatalf("expected event to be triggered")
+	}
+}
+
+func (*clockSuite) TestNewAlarmReset(c *gc.C) {
+	t0 := time.Now()
+	cl := testclock.NewClock(t0)
+	alarm := cl.NewAlarm(cl.Now().Add(time.Second))
+	cl.Advance(time.Second)
+	select {
+	case t := <-alarm.Chan():
+		c.Assert(t.UTC(), gc.Equals, t0.Add(time.Second).UTC())
+	case <-time.After(longWait):
+		c.Fatalf("expected event to be triggered")
+	}
+
+	neverFired := alarm.Reset(cl.Now().Add(time.Hour))
+	c.Assert(neverFired, jc.IsFalse)
+	neverFired = alarm.Reset(cl.Now().Add(50 * time.Millisecond))
+	c.Assert(neverFired, jc.IsTrue)
+	cl.Advance(100 * time.Millisecond)
+	select {
+	case t := <-alarm.Chan():
 		c.Assert(t.UTC(), gc.Equals, t0.Add(time.Second+100*time.Millisecond).UTC())
 	case <-time.After(longWait):
 		c.Fatalf("expected event to be triggered")
@@ -322,4 +413,15 @@ func (*clockSuite) TestMultipleWaiters(c *gc.C) {
 		c.Fatalf("expected all waits to complete")
 	}
 
+}
+
+func (*clockSuite) TestPastAlarmFired(c *gc.C) {
+	t0 := time.Now()
+	cl := testclock.NewClock(t0)
+	alarm := cl.NewAlarm(cl.Now().Add(-time.Nanosecond))
+	select {
+	case <-alarm.Chan():
+	case <-time.After(testing.ShortWait):
+		c.Fatal("alarm did not fire by deadline")
+	}
 }

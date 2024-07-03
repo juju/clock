@@ -15,7 +15,7 @@ import (
 	"github.com/juju/loggo"
 )
 
-// timer implements a mock clock.Timer for testing purposes.
+// timer implements the Timer interface.
 type timer struct {
 	deadline time.Time
 	clock    *Clock
@@ -39,6 +39,16 @@ func (t *timer) Stop() bool {
 // Chan is part of the clock.Timer interface.
 func (t *timer) Chan() <-chan time.Time {
 	return t.c
+}
+
+// alarm implements the Alarm interface.
+type alarm struct {
+	*timer
+}
+
+// Reset is part of the clock.Timer interface.
+func (a *alarm) Reset(t time.Time) bool {
+	return a.clock.resetTime(a.timer, t)
 }
 
 // Clock implements a mock clock.Clock for testing purposes.
@@ -74,6 +84,7 @@ func (clock *Clock) After(d time.Duration) <-chan time.Time {
 	return clock.NewTimer(d).Chan()
 }
 
+// NewTimer is part of the clock.Clock interface.
 func (clock *Clock) NewTimer(d time.Duration) clock.Timer {
 	c := make(chan time.Time, 1)
 	return clock.addAlarm(d, c, func() {
@@ -84,6 +95,26 @@ func (clock *Clock) NewTimer(d time.Duration) clock.Timer {
 // AfterFunc is part of the clock.Clock interface.
 func (clock *Clock) AfterFunc(d time.Duration, f func()) clock.Timer {
 	return clock.addAlarm(d, nil, func() {
+		go f()
+	})
+}
+
+// At is part of the clock.Clock interface.
+func (clock *Clock) At(t time.Time) <-chan time.Time {
+	return clock.NewAlarm(t).Chan()
+}
+
+// NewAlarm is part of the clock.Clock interface.
+func (clock *Clock) NewAlarm(t time.Time) clock.Alarm {
+	c := make(chan time.Time, 1)
+	return clock.addTimeAlarm(t, c, func() {
+		c <- clock.now
+	})
+}
+
+// AtFunc is part of the clock.Clock interface.
+func (clock *Clock) AtFunc(t time.Time, f func()) clock.Alarm {
+	return clock.addTimeAlarm(t, nil, func() {
 		go f()
 	})
 }
@@ -102,6 +133,22 @@ func (clock *Clock) addAlarm(d time.Duration, c chan time.Time, trigger func()) 
 	clock.addTimer(t)
 	clock.triggerAll()
 	return t
+}
+
+func (clock *Clock) addTimeAlarm(deadline time.Time, c chan time.Time, trigger func()) *alarm {
+	defer clock.notifyAlarm()
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	t := &timer{
+		c:        c,
+		deadline: deadline,
+		clock:    clock,
+		trigger:  trigger,
+		stack:    debug.Stack(),
+	}
+	clock.addTimer(t)
+	clock.triggerAll()
+	return &alarm{t}
 }
 
 // Advance advances the result of Now by the supplied duration, and sends
@@ -206,7 +253,33 @@ func (clock *Clock) reset(t *timer, d time.Duration) bool {
 	sort.Sort(byDeadline(clock.waiting))
 	if d <= 0 {
 		// If duration is <= 0, that means we should be triggering the
-		// Timer right away, as "now" has already occured.
+		// Timer right away, as "now" has already occurred.
+		clock.triggerAll()
+	}
+	return found
+}
+
+// resetTime is the underlying implementation of clock.Alarm.Reset, which may be
+// called by any Alarm backed by this Clock.
+func (clock *Clock) resetTime(t *timer, deadline time.Time) bool {
+	defer clock.notifyAlarm()
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+
+	found := false
+	for _, wt := range clock.waiting {
+		if wt == t {
+			found = true
+		}
+	}
+	if !found {
+		clock.waiting = append(clock.waiting, t)
+	}
+	t.deadline = deadline
+	sort.Sort(byDeadline(clock.waiting))
+	if clock.now.After(t.deadline) {
+		// If the time has already passed, that means we should be triggering the
+		// Timer right away, as "now" has already occurred.
 		clock.triggerAll()
 	}
 	return found
