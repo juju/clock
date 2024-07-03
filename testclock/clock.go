@@ -277,7 +277,7 @@ func (clock *Clock) resetTime(t *timer, deadline time.Time) bool {
 	}
 	t.deadline = deadline
 	sort.Sort(byDeadline(clock.waiting))
-	if clock.now.After(t.deadline) {
+	if !clock.now.Before(t.deadline) {
 		// If the time has already passed, that means we should be triggering the
 		// Timer right away, as "now" has already occurred.
 		clock.triggerAll()
