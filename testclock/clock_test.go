@@ -425,3 +425,14 @@ func (*clockSuite) TestPastAlarmFired(c *gc.C) {
 		c.Fatal("alarm did not fire by deadline")
 	}
 }
+
+func (*clockSuite) TestNowAlarmFired(c *gc.C) {
+	t0 := time.Now()
+	cl := testclock.NewClock(t0)
+	alarm := cl.NewAlarm(cl.Now())
+	select {
+	case <-alarm.Chan():
+	case <-time.After(testing.ShortWait):
+		c.Fatal("alarm did not fire by deadline")
+	}
+}
